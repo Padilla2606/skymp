@@ -19,12 +19,19 @@ else()
     string(JSON SERVER_SETTINGS_JSON SET "${SERVER_SETTINGS_JSON}" "npcSettings" "{}")
 endif()
 
-if(OFFLINE_MODE)
-    string(JSON SERVER_SETTINGS_JSON SET "${SERVER_SETTINGS_JSON}" "offlineMode" "true")
-    string(JSON SERVER_SETTINGS_JSON SET "${SERVER_SETTINGS_JSON}" "master" "\"\"")
-else()
-    string(JSON SERVER_SETTINGS_JSON SET "${SERVER_SETTINGS_JSON}" "offlineMode" "false")
-    string(JSON SERVER_SETTINGS_JSON SET "${SERVER_SETTINGS_JSON}" "master" "\"https://gateway.skymp.net\"")
+# master and offlineMode are deployment-specific: this fork points "master" at a
+# local master (Discord login + character selector), and a rebuild must not
+# clobber values the user has already configured. Seed them only when absent.
+string(FIND "${SERVER_SETTINGS_JSON}" "\"master\"" master_key_pos)
+string(FIND "${SERVER_SETTINGS_JSON}" "\"offlineMode\"" offline_mode_key_pos)
+if(master_key_pos EQUAL -1 OR offline_mode_key_pos EQUAL -1)
+    if(OFFLINE_MODE)
+        string(JSON SERVER_SETTINGS_JSON SET "${SERVER_SETTINGS_JSON}" "offlineMode" "true")
+        string(JSON SERVER_SETTINGS_JSON SET "${SERVER_SETTINGS_JSON}" "master" "\"\"")
+    else()
+        string(JSON SERVER_SETTINGS_JSON SET "${SERVER_SETTINGS_JSON}" "offlineMode" "false")
+        string(JSON SERVER_SETTINGS_JSON SET "${SERVER_SETTINGS_JSON}" "master" "\"https://gateway.skymp.net\"")
+    endif()
 endif()
 
 file(WRITE "${SERVER_SETTINGS_JSON_PATH}" "${SERVER_SETTINGS_JSON}")

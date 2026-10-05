@@ -46,6 +46,9 @@ else()
     SOURCES ${source}
     COMMAND ${CMAKE_COMMAND} -E echo "Building skymp5-functions-lib is disabled. To enable it, set BUILD_GAMEMODE to ON."
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/dist/server
-    COMMAND ${CMAKE_COMMAND} -E true > ${CMAKE_BINARY_DIR}/dist/server/gamemode.js
+    # Copia el gamemode real en vez de vaciar el archivo (antes: "-E true > ...")
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/gamemode.js
+            ${CMAKE_BINARY_DIR}/dist/server/gamemode.js
   )
 endif()

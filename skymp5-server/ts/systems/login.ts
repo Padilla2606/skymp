@@ -157,7 +157,7 @@ export class Login implements System {
               `https://discord.com/api/guilds/${guildConfig.guildId}/members/${profile.discordId}`,
               {
                 method: 'GET',
-                headers: { 'Authorization': `${discordAuth.botToken}` },
+                headers: { 'Authorization': `Bot ${discordAuth.botToken}` },
                 ...this.getFetchOptions('discordAuth_multi'),
               },
             );
@@ -249,7 +249,7 @@ export class Login implements System {
     this.fetchRetry(`https://discord.com/api/channels/${eventLogChannelId}/messages`, {
       method: 'POST',
       headers: {
-        'Authorization': `${botToken}`,
+        'Authorization': `Bot ${botToken}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({

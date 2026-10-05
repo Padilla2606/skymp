@@ -101,10 +101,17 @@ public:
   float magickaRespawnPercentage = 1.f;
   float staminaRespawnPercentage = 1.f;
 
-  // Used only for player characters. See GetSpawnPoint
-  LocationalData spawnPoint = { { 133857, -61130, 14662 },
-                                { 0.f, 0.f, 72.f },
-                                FormDesc::Tamriel() };
+  // Value that means "the gamemode never moved this actor". See GetSpawnPoint
+  static LocationalData DefaultSpawnPoint()
+  {
+    return LocationalData{ { 133857, -61130, 14662 },
+                           { 0.f, 0.f, 72.f },
+                           FormDesc::Tamriel() };
+  }
+
+  // Used for player characters, and for non-player characters that the
+  // gamemode moved explicitly. See GetSpawnPoint
+  LocationalData spawnPoint = DefaultSpawnPoint();
 
   float spawnDelay = 25.0f;
 

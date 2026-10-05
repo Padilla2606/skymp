@@ -404,16 +404,17 @@ TEST_CASE("BarrelFood01 PutItem/TakeItem", "[PartOne][espm]")
   REQUIRE(partOne.Messages()[2].j["t"] == MsgType::OpenContainer);
   REQUIRE(partOne.Messages()[2].j["target"] == ref.GetFormId());
 
-  REQUIRE_THROWS_WITH(
-    ref.PutItem(actor, { 0x12eb7, 2 }),
-    ContainsSubstring("Source inventory doesn't have enough 0x12eb7 "
-                      "(2 is required while 0 present)"));
+  // PutItem is desync-tolerant: it moves only what the actor really has
+  // instead of throwing when the request exceeds the source inventory.
+  auto barrelCount = ref.GetInventory().GetItemCount(0x12eb7);
+  ref.PutItem(actor, { 0x12eb7, 2 });
+  REQUIRE(ref.GetInventory().GetItemCount(0x12eb7) == barrelCount);
+  REQUIRE(actor.GetInventory().GetItemCount(0x12eb7) == 0);
 
   actor.AddItem(0x12eb7, 1);
-  REQUIRE_THROWS_WITH(
-    ref.PutItem(actor, { 0x12eb7, 2 }),
-    ContainsSubstring("Source inventory doesn't have enough 0x12eb7 "
-                      "(2 is required while 1 present)"));
+  ref.PutItem(actor, { 0x12eb7, 2 });
+  REQUIRE(ref.GetInventory().GetItemCount(0x12eb7) == barrelCount + 1);
+  REQUIRE(actor.GetInventory().GetItemCount(0x12eb7) == 0);
 
   actor.AddItem(0x12eb7, 1);
 

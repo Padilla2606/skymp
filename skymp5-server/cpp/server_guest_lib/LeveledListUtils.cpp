@@ -2,6 +2,7 @@
 #include "EvaluateTemplate.h"
 #include <optional>
 #include <random>
+#include <set>
 #include <spdlog/spdlog.h>
 #include <stdexcept>
 
@@ -222,4 +223,61 @@ uint32_t LeveledListUtils::EvaluateAndSelectNpcId(
 
   // Return the id of the first npc in the map
   return countByFormId.begin()->first;
+}
+
+std::vector<uint32_t> LeveledListUtils::CollectAllTerminalNpcs(
+  const espm::CombineBrowser& br, const espm::LookupResult& headNpc)
+{
+  std::set<uint32_t> visited;
+  std::set<uint32_t> terminals;
+  CollectAllTerminalNpcsRecursive(br, headNpc, visited, terminals);
+  return { terminals.begin(), terminals.end() };
+}
+
+void LeveledListUtils::CollectAllTerminalNpcsRecursive(
+  const espm::CombineBrowser& br, const espm::LookupResult& lookupRes,
+  std::set<uint32_t>& visited, std::set<uint32_t>& terminals)
+{
+  if (!lookupRes.rec) {
+    return;
+  }
+
+  uint32_t globalId = lookupRes.ToGlobalId(lookupRes.rec->GetId());
+  if (!visited.insert(globalId).second) {
+    return; // Already processed. Also breaks cycles.
+  }
+
+  if (espm::Convert<espm::NPC_>(lookupRes.rec)) {
+    espm::CompressedFieldsCache dummyCache;
+    auto data = espm::Convert<espm::NPC_>(lookupRes.rec)->GetData(dummyCache);
+    if (!data.baseTemplate) {
+      terminals.insert(globalId);
+      return;
+    }
+    auto templateRes = br.LookupById(lookupRes.ToGlobalId(data.baseTemplate));
+    if (!templateRes.rec) {
+      // The template target is not in the loaded plugin list. Treat this
+      // NPC as terminal: callers that require a whitelist match will then
+      // judge it by its own editorId.
+      terminals.insert(globalId);
+      return;
+    }
+    CollectAllTerminalNpcsRecursive(br, templateRes, visited, terminals);
+    return;
+  }
+
+  auto type = lookupRes.rec->GetType();
+  if (type == espm::LVLN::kType || type == espm::LVLI::kType) {
+    espm::CompressedFieldsCache dummyCache;
+    auto* leveledList =
+      reinterpret_cast<const espm::LeveledListBase*>(lookupRes.rec);
+    auto data = leveledList->GetData(dummyCache);
+    for (uint8_t i = 0; i < data.numEntries; ++i) {
+      CollectAllTerminalNpcsRecursive(
+        br, br.LookupById(lookupRes.ToGlobalId(data.entries[i].formId)),
+        visited, terminals);
+    }
+    return;
+  }
+  // Neither an NPC nor a levelled list (e.g. a levelled spell): ignore.
 }

@@ -118,7 +118,8 @@ export class SettingsService extends ClientListener {
         logTrace(this, `Resolved target peer`, targetPeer);
 
         const enrichedTargetPeer = { ...targetPeer };
-        enrichedTargetPeer.publicKeys = { ...defaultPeer.publicKeys, ...targetPeer.publicKeys };
+        const publicKeys = { ...defaultPeer.publicKeys, ...targetPeer.publicKeys };
+        enrichedTargetPeer.publicKeys = Object.keys(publicKeys).length > 0 ? publicKeys : undefined;
 
         logTrace(this, `Enriched target peer`, enrichedTargetPeer);
 

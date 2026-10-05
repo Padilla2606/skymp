@@ -19,7 +19,8 @@ class TES5DamageFormulaImpl
 
 public:
   TES5DamageFormulaImpl(const MpActor& aggressor_, const MpActor& target_,
-                        const HitData& hitData_);
+                        const HitData& hitData_, float armorRatingMultiplier_,
+                        float hiddenPieceBonus_);
 
   [[nodiscard]] float CalculateDamage() const;
 
@@ -28,6 +29,8 @@ private:
   const MpActor& target;
   const HitData& hitData;
   WorldState* espmProvider;
+  float armorRatingMultiplier;
+  float hiddenPieceBonus;
 
 private:
   [[nodiscard]] float GetBaseWeaponDamage() const;
@@ -35,6 +38,7 @@ private:
   [[nodiscard]] float CalcArmorRatingComponent(
     const Inventory::Entry& opponentEquipmentEntry) const;
   [[nodiscard]] float CalcOpponentArmorRating() const;
+  [[nodiscard]] float CalcWornArmorPieceCount() const;
   [[nodiscard]] float CalcMagicEffects(const Effects& effects) const;
   [[nodiscard]] float DetermineDamageFromSource(uint32_t source) const;
   [[nodiscard]] float CalcUnarmedDamage() const;
@@ -43,11 +47,15 @@ private:
 
 TES5DamageFormulaImpl::TES5DamageFormulaImpl(const MpActor& aggressor_,
                                              const MpActor& target_,
-                                             const HitData& hitData_)
+                                             const HitData& hitData_,
+                                             float armorRatingMultiplier_,
+                                             float hiddenPieceBonus_)
   : aggressor(aggressor_)
   , target(target_)
   , hitData(hitData_)
   , espmProvider(aggressor.GetParent())
+  , armorRatingMultiplier(armorRatingMultiplier_)
+  , hiddenPieceBonus(hiddenPieceBonus_)
 {
 }
 
@@ -113,6 +121,23 @@ float TES5DamageFormulaImpl::CalcOpponentArmorRating() const
   return combinedArmorRating;
 }
 
+float TES5DamageFormulaImpl::CalcWornArmorPieceCount() const
+{
+  // Same set of items CalcOpponentArmorRating sums up: only worn apparel
+  // counts. Worn weapons (a shield-less dagger in hand, arrows) must not:
+  // vanilla grants the hidden bonus per worn armor slot only.
+  float pieceCount = 0;
+  auto eq = target.GetEquipment();
+  for (auto& entry : eq.inv.entries) {
+    if (entry.GetWorn() != Inventory::Worn::None &&
+        espm::GetRecordType(entry.baseId, espmProvider) ==
+          espm::ARMO::kType) {
+      pieceCount += 1.f;
+    }
+  }
+  return pieceCount;
+}
+
 float TES5DamageFormulaImpl::CalcUnarmedDamage() const
 {
   const uint32_t raceId = aggressor.GetRaceId();
@@ -134,10 +159,23 @@ float TES5DamageFormulaImpl::CalcArmorDamagePenalty() const
   const float armorScalingFactor =
     espm::GetData<espm::GMST>(espm::GMST::kFArmorScalingFactor, espmProvider)
       .value;
-  return 0.01f *
-    (100.f -
-     std::min<float>(CalcOpponentArmorRating() * armorScalingFactor,
-                     maxArmorRating));
+
+  // TODO(#458): armor skill, perks and per-piece bonuses are not simulated.
+  // Summing the raw base ratings alone would give ~17% reduction for a full
+  // daedric set, while vanilla reaches fMaxArmorRating at skill 100, so the
+  // sum is scaled to approximate a maxed-out character.
+  const float effectiveArmorRating =
+    CalcOpponentArmorRating() * armorRatingMultiplier;
+
+  // Vanilla's hidden armor: +25 rating per worn piece (+3% reduction by
+  // default), applied after the scaled rating and capped together with it.
+  float damageReduction =
+    effectiveArmorRating * armorScalingFactor +
+    hiddenPieceBonus * CalcWornArmorPieceCount();
+  damageReduction = std::min<float>(damageReduction, maxArmorRating);
+  damageReduction = std::max<float>(damageReduction, 0.f);
+
+  return 0.01f * (100.f - damageReduction);
 }
 
 float TES5DamageFormulaImpl::CalculateDamage() const
@@ -231,11 +269,20 @@ float TES5SpellDamageFormulaImpl::CalculateDamage() const
 
 }
 
+TES5DamageFormula::TES5DamageFormula(float armorRatingMultiplier_,
+                                     float hiddenPieceBonus_)
+  : armorRatingMultiplier(armorRatingMultiplier_)
+  , hiddenPieceBonus(hiddenPieceBonus_)
+{
+}
+
 float TES5DamageFormula::CalculateDamage(const MpActor& aggressor,
                                          const MpActor& target,
                                          const HitData& hitData) const
 {
-  return internal::TES5DamageFormulaImpl(aggressor, target, hitData)
+  return internal::TES5DamageFormulaImpl(aggressor, target, hitData,
+                                         armorRatingMultiplier,
+                                         hiddenPieceBonus)
     .CalculateDamage();
 }
 

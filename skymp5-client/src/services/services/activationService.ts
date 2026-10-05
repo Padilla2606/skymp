@@ -9,6 +9,16 @@ import { localIdToRemoteId } from "../../view/worldViewMisc";
 import { LastInvService } from "./lastInvService";
 import { logError, logTrace } from "../../logging";
 
+// remoteServer.openCorpseLoot activates corpse references programmatically
+// to open the loot menu; the engine fires 'activate' synchronously inside
+// that call, and relaying it would make the server send a second
+// OpenContainer that re-opens the menu right after the player closes it.
+let suppressActivateEcho = false;
+
+export const setSuppressActivateEcho = (suppress: boolean): void => {
+    suppressActivateEcho = suppress;
+};
+
 export class ActivationService extends ClientListener {
     constructor(private sp: Sp, private controller: CombinedController) {
         super();
@@ -16,6 +26,9 @@ export class ActivationService extends ClientListener {
     }
 
     private onActivate(e: ActivateEvent) {
+        if (suppressActivateEcho) {
+            return;
+        }
         const lastInvService = this.controller.lookupListener(LastInvService);
         lastInvService.lastInv = getInventory(this.sp.Game.getPlayer() as Actor);
 

@@ -327,6 +327,12 @@ export const setupHooks = (): void => {
       if (ctx.selfId < 0xff000000) {
         return;
       }
+      // NPCs hosted by this client run their own AI here, so their engine
+      // idle/walk cycle is legitimate and must not be stripped: blanking it
+      // left them standing still with no locomotion animation at all.
+      if (!refsWithDefaultAnimsDisabled.has(ctx.selfId)) {
+        return;
+      }
       if (isIdle(ctx.animEventName)) {
         const i = allowedIdles.findIndex((pair) => {
           return pair[0] === ctx.selfId && pair[1] === ctx.animEventName;

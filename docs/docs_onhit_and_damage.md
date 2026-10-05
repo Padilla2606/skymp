@@ -44,5 +44,13 @@ armorRating = armorRating1 + armorRating2 + armorRating3 + ... + armorRatingN + 
 //fMaxArmorRating is [GMST:00037DEB], fArmorScalingFactor is [GMST:00021A72];
 //fMaxArmorRating = 80 by default, fArmorScalingFactor = 0.12 by default
 //magicArmorRating is sum of magnitudes of armors' enchantments with magic effect of damage resist
-receivedDamage = incomingDamage * 0.01 * (100 - std::min(armorRating * fArmorScalingFactor, fMaxArmorRating));
+//armorSkillMultiplier approximates armor skill + perks (not simulated by the server),
+//it defaults to 4.5 and can be changed via armorFormulaSettings.ratingMultiplier
+armorRating *= armorSkillMultiplier;
+//vanilla also adds a hidden rating of 25 per worn piece (+3% reduction at
+//fArmorScalingFactor = 0.12). SkyMP has no displayed rating, so it is applied
+//as armorFormulaSettings.hiddenPieceBonus percent per worn piece (3 by default,
+//0 disables it)
+damageReduction = std::min(armorRating * fArmorScalingFactor + hiddenPieceBonus * wornArmorPieces, fMaxArmorRating);
+receivedDamage = incomingDamage * 0.01 * (100 - damageReduction);
 ```

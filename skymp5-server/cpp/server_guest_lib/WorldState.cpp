@@ -15,6 +15,7 @@
 #include <ScopedTask.h>
 #include <Timer.h>
 #include <algorithm>
+#include <cctype>
 #include <antigo/Context.h>
 #include <deque>
 #include <fmt/format.h>
@@ -462,6 +463,23 @@ bool WorldState::AttachEspmRecord(const espm::CombineBrowser& br,
         *optionalOutTrace
           << fmt::format("Skip NPC loading, it is not allowed. refrId {:#x}",
                          formId)
+          << std::endl;
+      }
+      return false;
+    }
+    if (!npcAllowedBases.empty() &&
+        !IsNpcBaseAllowed(base.rec->GetEditorId(cache)) &&
+        !AreAllTemplateSpeciesAllowed(br, base)) {
+      spdlog::trace(
+        "Skip NPC loading, neither its base nor any species in its template "
+        "chain is in npcAllowedBases. refrId {:#x}",
+        formId);
+      if (optionalOutTrace) {
+        *optionalOutTrace
+          << fmt::format(
+               "Skip NPC loading, neither its base nor any species in its "
+               "template chain is in npcAllowedBases. refrId {:#x}",
+               formId)
           << std::endl;
       }
       return false;
@@ -1167,6 +1185,73 @@ void WorldState::SetNpcSettings(
   std::unordered_map<std::string, NpcSettingsEntry>&& settings)
 {
   npcSettings = settings;
+}
+
+void WorldState::SetNpcAllowedBases(std::vector<std::string>&& bases)
+{
+  npcAllowedBases = std::move(bases);
+  for (auto& base : npcAllowedBases) {
+    std::transform(base.begin(), base.end(), base.begin(),
+                   [](unsigned char c) {
+                     return static_cast<char>(std::tolower(c));
+                   });
+  }
+}
+
+bool WorldState::IsNpcBaseAllowed(const char* baseEditorId) const noexcept
+{
+  if (npcAllowedBases.empty()) {
+    return true;
+  }
+  if (!baseEditorId || !*baseEditorId) {
+    return false;
+  }
+  std::string lowered(baseEditorId);
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                 [](unsigned char c) {
+                   return static_cast<char>(std::tolower(c));
+                 });
+  for (const auto& fragment : npcAllowedBases) {
+    if (lowered.find(fragment) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool WorldState::AreAllTemplateSpeciesAllowed(const espm::CombineBrowser& br,
+                                              const espm::LookupResult& base)
+{
+  if (npcAllowedBases.empty()) {
+    return true;
+  }
+  auto* npc = espm::Convert<espm::NPC_>(base.rec);
+  if (!npc) {
+    return false;
+  }
+  auto& cache = GetEspmCache();
+  if (!npc->GetData(cache).baseTemplate) {
+    // No template chain, so the raw base editorId is all we have and it
+    // has already failed the whitelist check.
+    return false;
+  }
+  auto terminals = LeveledListUtils::CollectAllTerminalNpcs(br, base);
+  if (terminals.empty()) {
+    return false;
+  }
+  // Only allow when *every* creature this template can produce is
+  // whitelisted: the actual pick from a levelled list is random, so a
+  // single non-whitelisted option would make spawning nondeterministic.
+  for (uint32_t terminalId : terminals) {
+    auto terminalRes = br.LookupById(terminalId);
+    if (!terminalRes.rec) {
+      return false;
+    }
+    if (!IsNpcBaseAllowed(terminalRes.rec->GetEditorId(cache))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool WorldState::RemoveTimer(uint32_t timerId)

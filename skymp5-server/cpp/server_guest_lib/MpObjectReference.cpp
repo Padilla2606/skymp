@@ -891,6 +891,28 @@ void MpObjectReference::RemoveItems(
   }
 }
 
+void MpObjectReference::RemoveItemsClamped(
+  const std::vector<Inventory::Entry>& entries,
+  std::vector<Inventory::Entry>* removedEntries)
+{
+  EditChangeForm([&](MpChangeFormREFR& changeForm) {
+    changeForm.inv.RemoveItemsClamped(entries, removedEntries);
+  });
+
+  SendInventoryUpdate();
+
+  // Same reloot behaviour as RemoveItems: a container emptied by the
+  // transfer asks to be refilled from its base form.
+  if (GetBaseType() == "CONT") {
+    if (GetInventory().IsEmpty()) {
+      spdlog::info("MpObjectReference::RemoveItemsClamped - {:x} requesting "
+                   "reloot",
+                   this->GetFormId());
+      RequestReloot();
+    }
+  }
+}
+
 void MpObjectReference::RemoveAllItems(MpObjectReference* target)
 {
   auto prevInv = GetInventory();
@@ -1535,6 +1557,51 @@ void MpObjectReference::ProcessActivateNormal(
       this->occupantDisableSink.reset(
         new OccupantDisableEventSink(*GetParent(), this));
       this->occupant->AddEventSink(this->occupantDisableSink);
+    }
+  } else if (t == "NPC_" && actorActivator && AsActor()) {
+    // A dead NPC (a corpse) is looted like a container: sync its
+    // inventory to the looter and ask them to open the loot menu
+    // (client: remoteServer.ts onOpenContainerMessage activates the
+    // reference locally; taking items goes through TakeItem/PutItem).
+    // Alive NPCs are left untouched (no dialogue support here), and
+    // player corpses are not lootable.
+    // TakeItem/PutItem throw unless this->occupant == the looter, so
+    // the corpse registers its looter exactly like the CONT branch does.
+    auto* selfActor = AsActor();
+    if (!selfActor->IsCreatedAsPlayer() && selfActor->IsDead()) {
+      constexpr float kOccupancyReach = 512.f;
+      if (CheckIfObjectCanStartOccupyThis(activationSource,
+                                           kOccupancyReach)) {
+        if (this->occupant) {
+          this->occupant->RemoveEventSink(this->occupantDestroySink);
+          this->occupant->RemoveEventSink(this->occupantDisableSink);
+        }
+        spdlog::info(
+          "MpObjectReference::ProcessActivate {:x} - opening corpse inventory "
+          "(activationSource = {:x})",
+          GetFormId(), activationSource.GetFormId());
+        actorActivator->GetActorToSendTo().SendToUser(
+          CreatePropertyMessage_(this, "inventory",
+                                 GetInventory().ToJson().dump()),
+          true);
+        activationSource.SendOpenContainer(GetFormId());
+
+        this->occupant = actorActivator;
+
+        this->occupantDestroySink.reset(
+          new OccupantDestroyEventSink(*GetParent(), this));
+        this->occupant->AddEventSink(this->occupantDestroySink);
+
+        this->occupantDisableSink.reset(
+          new OccupantDisableEventSink(*GetParent(), this));
+        this->occupant->AddEventSink(this->occupantDisableSink);
+      }
+    } else {
+      spdlog::debug(
+        "MpObjectReference::ProcessActivate {:x} - corpse branch skipped "
+        "(isDead = {}, isCreatedAsPlayer = {})",
+        GetFormId(), selfActor->IsDead(),
+        selfActor->IsCreatedAsPlayer());
     }
   } else if (t == espm::ACTI::kType && actorActivator) {
     // SendOpenContainer being used to activate the object

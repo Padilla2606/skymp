@@ -32,6 +32,12 @@ std::string PutItemEvent::GetArgumentsJsonArray() const
 
 void PutItemEvent::OnFireSuccess(WorldState*)
 {
-  std::vector<Inventory::Entry> entries = { entry };
-  actor->RemoveItems(entries, sourceRefr);
+  // Same desync tolerance as TakeItemEvent: move only what the player really
+  // has, instead of throwing and dropping the transfer.
+  std::vector<Inventory::Entry> removed;
+  actor->RemoveItemsClamped({ entry }, &removed);
+
+  for (const auto& e : removed) {
+    sourceRefr->AddItems({ e });
+  }
 }

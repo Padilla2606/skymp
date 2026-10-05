@@ -99,6 +99,15 @@ public:
   Inventory& AddItem(uint32_t baseId, uint32_t count);
   Inventory& AddItems(const std::vector<Entry>& entries);
   Inventory& RemoveItems(const std::vector<Entry>& entries);
+
+  // Like RemoveItems, but never throws: it removes as much of each entry as
+  // is actually present and reports what was taken. Used by the TakeItem /
+  // PutItem paths, where a client/server inventory desync must not abort the
+  // whole transfer.
+  Inventory& RemoveItemsClamped(
+    const std::vector<Entry>& entries,
+    std::vector<Entry>* removedEntries = nullptr);
+
   bool HasItem(uint32_t baseId) const;
   uint32_t GetItemCount(uint32_t baseId) const;
   uint32_t GetTotalItemCount() const;

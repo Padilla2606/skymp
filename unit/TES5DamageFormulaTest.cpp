@@ -76,8 +76,11 @@ TEST_CASE("Damage is reduced based on target's armor", "[TES5DamageFormula]")
   ac.SetEquipment(eq);
 
   TES5DamageFormula formula{};
-  // 4 * 0.01 * (100 - 20 * .12) = 3,904
-  REQUIRE(formula.CalculateDamage(ac, ac, hitData) == 3.903999805f);
+  // 4 * 0.01 * (100 - (20 * 4.5 * .12 + 3 * 2)) = 3,328
+  // (20 * 4.5 = armor skill/perk approximation, see kDefaultArmorRatingMultiplier;
+  //  3 * 2 = hidden armor bonus, see kDefaultHiddenPieceBonus)
+  REQUIRE(formula.CalculateDamage(ac, ac, hitData) ==
+          4.0f * (0.01f * (100.0f - (20.0f * 4.5f * 0.12f + 3.0f * 2.0f))));
 
   auto repeatativeEntry = Inventory::Entry(77382, 1, kExtraWornTrue);
   Equipment eq2;
@@ -89,7 +92,7 @@ TEST_CASE("Damage is reduced based on target's armor", "[TES5DamageFormula]")
   // Total rating for worn armor: 10 * 70 = 700
   ac.SetEquipment(eq2);
 
-  // Armor rating is 700 * 0.12% = 84%
+  // Armor rating is 700 * 4.5 * 0.12% = 378%, plus 3% * 70 pieces = 210%
   // But fMaxArmorRating = 80%
   // 4 * 0.01 * (100 - 80) = 4 * 0.2 = 0.8
   REQUIRE(formula.CalculateDamage(ac, ac, hitData) == 0.7999999523f);

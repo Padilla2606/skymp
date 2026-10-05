@@ -134,6 +134,15 @@ export class AuthService extends ClientListener {
       logTrace(this, `Offline mode detected in settings, emitting auth event with authGameData.local`);
       this.controller.emitter.emit("authAttempt", { authGameData: { local: { profileId: settingsGameData.profileId } } });
     } else {
+      const diskAuthData = this.readAuthDataFromDisk();
+      if (diskAuthData?.session) {
+        logTrace(this, `Session found on disk (written by launcher), logging in without dialog`);
+        authData = diskAuthData;
+        this.autoLoginAttempted = true;
+        this.controller.emitter.emit("authAttempt", { authGameData: { remote: diskAuthData } });
+        return;
+      }
+
       logTrace(this, `No offline mode detectted in settings, regular auth needed`);
       this.setListenBrowserMessage(true, 'authNeeded event received');
 
@@ -164,6 +173,7 @@ export class AuthService extends ClientListener {
       }
     }
 
+    this.autoLoginAttempted = false;
     this.loggingStartMoment = 0;
     this.authAttemptProgressIndicator = false;
   }
@@ -657,7 +667,7 @@ export class AuthService extends ClientListener {
     if (this.loggingStartMoment && Date.now() - this.loggingStartMoment > maxLoggingDelay) {
       logTrace(this, 'Max logging delay reached received');
 
-      if (this.playerEverSawActualGameplay) {
+      if (this.playerEverSawActualGameplay && !this.autoLoginAttempted) {
         logTrace(this, 'Player saw actual gameplay, reconnecting');
         this.loggingStartMoment = 0;
         this.controller.lookupListener(NetworkingService).reconnect();
@@ -667,6 +677,7 @@ export class AuthService extends ClientListener {
         this.loggingStartMoment = 0;
         this.authAttemptProgressIndicator = false;
         this.controller.lookupListener(NetworkingService).close();
+        this.setListenBrowserMessage(true, 'max logging delay reached');
         browserState.comment = "";
         browserState.loginFailedReason = strings.technicalIssues;
         this.sp.browser.executeJavaScript(new FunctionInfo(this.loginFailedWidgetSetter).getText({ events, browserState, authData: authData, strings }));
@@ -722,6 +733,8 @@ export class AuthService extends ClientListener {
 
   private authAttemptProgressIndicator = false;
   private authAttemptProgressIndicatorCounter = 0;
+
+  private autoLoginAttempted = false;
 
   private playerEverSawActualGameplay = false;
 

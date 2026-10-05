@@ -283,6 +283,24 @@ ScampServer::ScampServer(const Napi::CallbackInfo& info)
       spdlog::info(msg.str());
     }
 
+    if (serverSettings.find("npcAllowedBases") != serverSettings.end() &&
+        serverSettings.at("npcAllowedBases").is_array()) {
+      std::vector<std::string> allowedBases;
+      for (const auto& base : serverSettings.at("npcAllowedBases")) {
+        if (base.is_string()) {
+          auto str = base.get<std::string>();
+          if (!str.empty()) {
+            allowedBases.push_back(std::move(str));
+          }
+        }
+      }
+      partOne->worldState.SetNpcAllowedBases(std::move(allowedBases));
+      spdlog::info(
+        "{} npcAllowedBases loaded. Only NPCs whose base editorId contains "
+        "one of them (ignoring case) will be spawned",
+        partOne->worldState.npcAllowedBases.size());
+    }
+
     if (serverSettings.find("enableConsoleCommandsForAll") !=
         serverSettings.end()) {
       if (serverSettings.at("enableConsoleCommandsForAll").is_boolean()) {
@@ -370,11 +388,34 @@ ScampServer::ScampServer(const Napi::CallbackInfo& info)
     auto damageMultConditionalFormulaSettings =
       serverSettings["damageMultConditionalFormulaSettings"];
 
+    auto armorFormulaSettings = serverSettings["armorFormulaSettings"];
+
     auto conditionsEvaluatorSettings =
       serverSettings["conditionsEvaluatorSettings"];
 
+    // Armor skill/perks are not simulated, so the summed base ratings of worn
+    // armor get scaled by this multiplier (see TES5DamageFormula.h).
+    float armorRatingMultiplier =
+      TES5DamageFormula::kDefaultArmorRatingMultiplier;
+    // Vanilla's hidden armor bonus (+3% damage reduction per worn piece).
+    float armorHiddenPieceBonus = TES5DamageFormula::kDefaultHiddenPieceBonus;
+    if (armorFormulaSettings.is_object()) {
+      if (armorFormulaSettings["ratingMultiplier"].is_number()) {
+        armorRatingMultiplier =
+          armorFormulaSettings["ratingMultiplier"].get<float>();
+      }
+      if (armorFormulaSettings["hiddenPieceBonus"].is_number()) {
+        armorHiddenPieceBonus =
+          armorFormulaSettings["hiddenPieceBonus"].get<float>();
+      }
+    }
+    logger->info(
+      "armorFormulaSettings ratingMultiplier is {}, hiddenPieceBonus is {}",
+      armorRatingMultiplier, armorHiddenPieceBonus);
+
     std::unique_ptr<IDamageFormula> formula;
-    formula = std::make_unique<TES5DamageFormula>();
+    formula = std::make_unique<TES5DamageFormula>(armorRatingMultiplier,
+                                                  armorHiddenPieceBonus);
     formula = std::make_unique<DamageMultFormula>(std::move(formula),
                                                   damageMultFormulaSettings);
     formula = std::make_unique<SweetPieDamageFormula>(

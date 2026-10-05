@@ -228,6 +228,9 @@ public:
 
   void SetNpcSettings(
     std::unordered_map<std::string, NpcSettingsEntry>&& settings);
+  // Loads only NPCs whose base editorId contains one of these fragments
+  // (case-insensitive). Empty means "load every NPC".
+  void SetNpcAllowedBases(std::vector<std::string>&& bases);
   void SetForbiddenRelootTypes(const std::set<std::string>& types);
   void SetEnableConsoleCommandsForAllSetting(bool enable);
 
@@ -249,6 +252,8 @@ public:
   bool npcEnabled = false;
   std::unordered_map<std::string, NpcSettingsEntry> npcSettings;
   NpcSettingsEntry defaultSetting;
+  // Lowercased fragments, see SetNpcAllowedBases/IsNpcBaseAllowed
+  std::vector<std::string> npcAllowedBases;
   bool enableConsoleCommandsForAll = false;
 
   bool disableVanillaScriptsInExterior = true;
@@ -282,6 +287,14 @@ private:
   void TickTimers(const std::chrono::system_clock::time_point& now);
   [[nodiscard]] bool NpcSourceFilesOverriden() const noexcept;
   [[nodiscard]] bool IsNpcAllowed(uint32_t refrId) const noexcept;
+  [[nodiscard]] bool IsNpcBaseAllowed(const char* baseEditorId) const noexcept;
+  // True when every terminal NPC reachable through base's template chain
+  // (TPLT / levelled creature lists) matches npcAllowedBases. Consulted only
+  // when the raw base editorId itself does not match, so habitat-named
+  // template bases like LvlAnimalForestPredator still load when every
+  // creature they can produce is whitelisted.
+  [[nodiscard]] bool AreAllTemplateSpeciesAllowed(
+    const espm::CombineBrowser& br, const espm::LookupResult& base);
   [[nodiscard]] uint32_t GetFileIdx(uint32_t formId) const noexcept;
   [[nodiscard]] bool IsRelootForbidden(std::string type) const noexcept;
 

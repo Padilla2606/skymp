@@ -181,6 +181,24 @@ void MpActor::EquipBestWeapon()
     newEq.inv.AddItems({ bestEntry });
   }
 
+  // Spells: Equipment::IsSpellEquipped only consults the four spell slots,
+  // which nothing else fills for NPCs. Without this, a Frostbite Spider
+  // casting its frostbite spell got "spell not found in equipment" and every
+  // attack was discarded, so NPCs never dealt damage. Fill the slots from
+  // the actor's own inventory (spells the outfit gave it, or that it carries).
+  if (!newEq.leftSpell && !newEq.rightSpell) {
+    for (const auto& entry : inv.entries) {
+      if (!entry.count) {
+        continue;
+      }
+      auto lookupRes = loader.GetBrowser().LookupById(entry.baseId);
+      if (espm::Convert<espm::SPEL>(lookupRes.rec)) {
+        newEq.rightSpell = entry.baseId;
+        break;
+      }
+    }
+  }
+
   SetEquipment(newEq);
 
   UpdateEquipmentMessage msg;
@@ -1459,6 +1477,14 @@ LocationalData MpActor::GetSpawnPoint() const
 
   if (!IsCreatedAsPlayer()) {
     if (formId < 0xff000000) {
+      // Actor placed by the game files: by default it respawns where the game
+      // file placed it. If the gamemode moved it (mp.set(id, "spawnPoint",
+      // ...) from npc-spots.json) the override wins, so a moved NPC stays
+      // where the gamemode put it instead of jumping back to its old spot.
+      const auto& spawnPoint = ChangeForm().spawnPoint;
+      if (spawnPoint != MpChangeForm::DefaultSpawnPoint()) {
+        return spawnPoint;
+      }
       return GetEditorLocationalData();
     }
   }

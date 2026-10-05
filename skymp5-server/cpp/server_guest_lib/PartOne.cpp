@@ -215,6 +215,13 @@ void PartOne::SetUserActor(Networking::UserId userId, uint32_t actorFormId)
     // This is not currently saved client-side, so reset
     actor.SetLastAnimEvent(std::nullopt);
 
+    // Push our authoritative inventory to the freshly connected client. The
+    // client keeps its own copy between sessions (e.g. the starting gear from
+    // the character creator), so without this the two inventories diverge:
+    // the client equips items we do not own, we reject the whole equipment
+    // update and the player ends up weaponless and unable to deal damage.
+    actor.SendInventoryUpdate();
+    actor.EquipBestWeapon();
   } else {
     serverState.actorsMap.Erase(userId);
   }

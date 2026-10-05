@@ -33,5 +33,14 @@ std::string TakeItemEvent::GetArgumentsJsonArray() const
 
 void TakeItemEvent::OnFireSuccess(WorldState*)
 {
-  sourceRefr->RemoveItems({ entry }, actor);
+  // The client's inventory view can drift from ours (periodic applyInventory,
+  // loot menus, respawns), so a take can legitimately ask for more than we
+  // have. Take what is really there instead of throwing and losing the whole
+  // transfer.
+  std::vector<Inventory::Entry> removed;
+  sourceRefr->RemoveItemsClamped({ entry }, &removed);
+
+  for (const auto& e : removed) {
+    actor->AddItems({ e });
+  }
 }

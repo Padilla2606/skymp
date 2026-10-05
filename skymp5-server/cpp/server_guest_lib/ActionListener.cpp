@@ -290,16 +290,26 @@ void ActionListener::OnUpdateEquipment(const RawMessageData& rawMsgData,
 
   std::vector<uint32_t> itemIdsToUnequip;
 
+  // Items the client wears but the server does not own (e.g. leftovers from
+  // an inventory desync) are dropped from this update instead of rejecting the
+  // whole set. Rejecting everything made the server unequip the player's
+  // weapon too, which silently disabled melee damage: with no weapon the
+  // client sends an unarmed hit that hitService discards.
   const auto& inventory = actor->GetInventory();
+  Equipment filteredEquipment = data;
+  filteredEquipment.inv.entries.clear();
   for (auto& entry : equipmentInv.entries) {
     if (!inventory.HasItem(entry.baseId)) {
       spdlog::warn(
-        "ActionListener::OnUpdateEquipment {:x} - rejected equipment "
-        "update: inventory does not contain item {:x}",
+        "ActionListener::OnUpdateEquipment {:x} - dropping equipped item {:x}: "
+        "inventory does not contain it",
         actorFormId, entry.baseId);
-      isAllowed = false;
-      break;
+      if (entry.GetWorn() != Inventory::Worn::None) {
+        itemIdsToUnequip.push_back(entry.baseId);
+      }
+      continue;
     }
+    filteredEquipment.inv.AddItems({ entry });
   }
 
   if (isAllowed) {
@@ -308,7 +318,7 @@ void ActionListener::OnUpdateEquipment(const RawMessageData& rawMsgData,
       uint32_t occupiedSlots = 0;
       // Track which item owns each bit so we can report conflicts
       std::array<uint32_t, 32> slotOwner = {};
-      for (auto& entry : equipmentInv.entries) {
+      for (auto& entry : filteredEquipment.inv.entries) {
         if (entry.GetWorn() == Inventory::Worn::None) {
           continue;
         }
@@ -372,7 +382,25 @@ void ActionListener::OnUpdateEquipment(const RawMessageData& rawMsgData,
 
   if (isAllowed) {
     SendToNeighbours(msg.idx, rawMsgData, true);
-    actor->SetEquipment(data);
+    actor->SetEquipment(filteredEquipment);
+    if (!itemIdsToUnequip.empty()) {
+      // Still tell the client to drop the items we filtered out, but keep the
+      // rest of its equipment (including its weapon) intact.
+      actor->SendInventoryUpdate();
+      for (uint32_t itemId : itemIdsToUnequip) {
+        SpSnippetObjectArgument itemArg;
+        itemArg.formId = itemId;
+        itemArg.type = "Form";
+        std::vector<std::optional<
+          std::variant<bool, double, std::string, SpSnippetObjectArgument>>>
+          args;
+        args.push_back(itemArg);
+        args.push_back(false);
+        args.push_back(true);
+        SpSnippet("Actor", "UnequipItem", args, actor->GetFormId())
+          .Execute(actor, SpSnippetMode::kNoReturnResult);
+      }
+    }
   } else {
     actor->SendInventoryUpdate();
 
@@ -465,8 +493,16 @@ void ActionListener::OnActivate(const RawMessageData& rawMsgData,
 
   auto targetPtr = std::dynamic_pointer_cast<MpObjectReference>(
     partOne.worldState.LookupFormById(static_cast<uint32_t>(msg.data.target)));
-  if (!targetPtr)
+  if (!targetPtr) {
+    // Without this the activation is silently dropped, which hides client
+    // id-mapping bugs (the very reason corpse loot can fail to open)
+    spdlog::warn(
+      "ActionListener::OnActivate - target {:x} not found (caster {:x}, "
+      "user {:d}), dropping activation",
+      static_cast<uint32_t>(msg.data.target), msg.data.caster,
+      rawMsgData.userId);
     return;
+  }
 
   constexpr bool kDefaultProcessingOnlyFalse = false;
   targetPtr->Activate(
@@ -682,8 +718,8 @@ void ActionListener::OnHostAttempt(const RawMessageData& rawMsgData,
   if (hoster == 0 || !lastRemoteUpdate ||
       std::chrono::system_clock::now() - *lastRemoteUpdate >
         hostResetTimeout) {
-    partOne.GetLogger().info("Hoster changed from {0:x} to {0:x}", prevHoster,
-                             me->GetFormId());
+    partOne.GetLogger().info("Hoster changed from {0:x} to {1:x} (form {2:x})",
+                             prevHoster, me->GetFormId(), remoteId);
     hoster = me->GetFormId();
     remote.UpdateHoster(hoster);
 
@@ -985,8 +1021,11 @@ bool CanHit(const MpActor& actor, const HitData& hitData,
       (1.1 * (1 / speedMult) * (speedMult <= 0.75 ? 0.45 : 0.3));
   }
 
-  throw std::runtime_error(
-    fmt::format("Cannot get weapon speed from source: {0:x}", hitData.source));
+  // Unarmed attacks (and any other source without WEAP data) have no weapon
+  // speed to derive a cooldown from. The damage formula handles them
+  // (TES5DamageFormulaImpl::IsUnarmedAttack), so accept the hit instead of
+  // throwing: throwing here silently discarded the whole attack.
+  return true;
 }
 
 bool ShouldBeBlocked(const MpActor& aggressor, const MpActor& target)
@@ -1301,14 +1340,16 @@ void ActionListener::OnWeaponHit(MpActor* aggressor,
     WorldState* espmProvider = targetActor.GetParent();
     auto weapDNAM =
       espm::GetData<espm::WEAP>(hitData.source, espmProvider).weapDNAM;
-    float expectedAttackTime = (1.1 * (1 / weapDNAM->speed)) -
-      (1.1 * (1 / weapDNAM->speed) * (weapDNAM->speed <= 0.75 ? 0.45 : 0.3));
-    spdlog::debug(
-      "OnWeaponHit - Target {0:x} is not available for attack due to fast "
-      "attack speed. Weapon: {1:x}. Elapsed time: {2}. Expected attack time: "
-      "{3}",
-      hitData.target, hitData.source, timePassedAnyTarget.count(),
-      expectedAttackTime);
+    if (weapDNAM) {
+      float expectedAttackTime = (1.1 * (1 / weapDNAM->speed)) -
+        (1.1 * (1 / weapDNAM->speed) * (weapDNAM->speed <= 0.75 ? 0.45 : 0.3));
+      spdlog::debug(
+        "OnWeaponHit - Target {0:x} is not available for attack due to fast "
+        "attack speed. Weapon: {1:x}. Elapsed time: {2}. Expected attack "
+        "time: {3}",
+        hitData.target, hitData.source, timePassedAnyTarget.count(),
+        expectedAttackTime);
+    }
     return;
   }
 

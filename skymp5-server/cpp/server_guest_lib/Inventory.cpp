@@ -146,6 +146,57 @@ Inventory& Inventory::RemoveItems(const std::vector<Entry>& entries)
   return *this;
 }
 
+Inventory& Inventory::RemoveItemsClamped(
+  const std::vector<Entry>& entries, std::vector<Entry>* removedEntries)
+{
+  auto copy = *this;
+
+  for (auto& e : entries) {
+    if (!e.count) {
+      continue;
+    }
+
+    uint32_t remaining = e.count;
+    uint32_t totalRemoved = 0;
+    for (auto& entry : copy.entries) {
+      if (entry.EqualExceptCount(e)) {
+        if (entry.count > remaining) {
+          entry.count -= remaining;
+          totalRemoved += remaining;
+          remaining = 0;
+          break;
+        } else {
+          totalRemoved += entry.count;
+          remaining -= entry.count;
+          entry.count = 0;
+        }
+      }
+    }
+
+    if (totalRemoved) {
+      if (removedEntries) {
+        Inventory::Entry taken = e;
+        taken.count = totalRemoved;
+        removedEntries->push_back(taken);
+      }
+    } else {
+      spdlog::warn(
+        "Inventory::RemoveItemsClamped - nothing to remove for {:x} "
+        "(requested {})",
+        e.baseId, e.count);
+    }
+  }
+
+  // remove empty entries
+  copy.entries.erase(
+    std::remove_if(copy.entries.begin(), copy.entries.end(),
+                   [](const Entry& e) { return e.count == 0; }),
+    copy.entries.end());
+
+  *this = copy;
+  return *this;
+}
+
 bool Inventory::HasItem(uint32_t baseId) const
 {
   for (auto& entry : entries) {

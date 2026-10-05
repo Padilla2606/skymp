@@ -32,19 +32,22 @@ TEST_CASE("Notification", "[Papyrus][Debug]")
 
   p.Tick(); // Tick deferred messages
 
-  REQUIRE(p.Messages().size() == 3);
-  REQUIRE(p.Messages()[1].userId == 3);
-  REQUIRE(p.Messages()[1].reliable);
-  REQUIRE(p.Messages()[1].j ==
+  // SetUserActor now also pushes the authoritative inventory/equipment to the
+  // connecting client, so an extra deferred message is expected before the
+  // Papyrus notifications.
+  REQUIRE(p.Messages().size() == 4);
+  REQUIRE(p.Messages()[2].userId == 3);
+  REQUIRE(p.Messages()[2].reliable);
+  REQUIRE(p.Messages()[2].j ==
           nlohmann::json{ { "t", 30 },
                           { "snippetIdx", 4294967295 },
                           { "selfId", 0 },
                           { "class", "Debug" },
                           { "function", "Notification" },
                           { "arguments", { "Hello, world!" } } });
-  REQUIRE(p.Messages()[2].userId == 3);
-  REQUIRE(p.Messages()[2].reliable);
-  REQUIRE(p.Messages()[2].j ==
+  REQUIRE(p.Messages()[3].userId == 3);
+  REQUIRE(p.Messages()[3].reliable);
+  REQUIRE(p.Messages()[3].j ==
           nlohmann::json{ { "t", 30 },
                           { "snippetIdx", 4294967295 },
                           { "selfId", 0 },

@@ -23,7 +23,7 @@ import { nameof } from '../../lib/nameof';
 import { setActorValuePercentage } from '../../sync/actorvalues';
 import { applyAppearanceToPlayer } from '../../sync/appearance';
 import { applyEquipment, isBadMenuShown } from '../../sync/equipment';
-import { Inventory, applyInventory } from '../../sync/inventory';
+import { Inventory, applyInventory, getInventory } from '../../sync/inventory';
 import { Movement } from '../../sync/movement';
 import { learnSpells, removeAllSpells } from '../../sync/spell';
 import { ModelApplyUtils } from '../../view/modelApplyUtils';
@@ -41,6 +41,7 @@ import { RespawnNeededError } from '../../lib/errors';
 import { OpenContainerMessage } from '../messages/openContainerMessage';
 import { ActivateMessage } from '../messages/activateMessage';
 import { ClientListener, CombinedController, Sp } from './clientListener';
+import { setSuppressActivateEcho } from './activationService';
 import { HostStartMessage } from '../messages/hostStartMessage';
 import { HostStopMessage } from '../messages/hostStopMessage';
 import { ConnectionMessage } from '../events/connectionMessage';
@@ -74,6 +75,20 @@ export const getPcInventory = (): Inventory | undefined => {
 
 const setPcInventory = (inv: Inventory): void => {
   storage['pcInv'] = inv;
+};
+
+// Snapshot of a corpse's local inventory taken the moment its loot menu is
+// opened. containersService uses it to compute exactly which entries left the
+// body, instead of diffing the player's whole inventory (which drifts because
+// of the periodic applyInventory below).
+const corpseLootSnapshots: Record<number, Inventory> = {};
+
+export const getCorpseLootSnapshot = (localId: number): Inventory | undefined => {
+  return corpseLootSnapshots[localId];
+};
+
+export const clearCorpseLootSnapshot = (localId: number): void => {
+  delete corpseLootSnapshots[localId];
 };
 
 let pcInvLastApply = 0;
@@ -175,14 +190,47 @@ export class RemoteServer extends ClientListener {
 
   private onOpenContainerMessage(event: ConnectionMessage<OpenContainerMessage>): void {
     once('update', async () => {
+      // Persistent breadcrumb: "target 4 not found" in server.log proves the
+      // OpenContainer message arrived and this handler started.
+      this.sendLootMarker(4);
+
       await Utility.wait(0.1); // Give a chance to update inventory
+      this.sendLootMarker(5);
 
       const remoteId = event.message.target;
-      const localId = remoteIdToLocalId(remoteId);
-      const refr = ObjectReference.from(Game.getFormEx(localId));
+      let localId = remoteIdToLocalId(remoteId);
+      let refr = ObjectReference.from(Game.getFormEx(localId));
+
+      if (remoteId < 0xff000000) {
+        // Prefer the modeled FF copy of esm-anchored actors: the server
+        // creates them as esm id + 0x100000000, while the vanilla original
+        // may be alive, disabled mid-deletion or already gone
+        // (WorldCleanerService deletes unprotected esm actors). Containers
+        // have no view at the offset id, so they keep resolving to the
+        // vanilla original as before.
+        const ffLocalId = remoteIdToLocalId(remoteId + 0x100000000);
+        const ffRefr = ffLocalId ? ObjectReference.from(Game.getFormEx(ffLocalId)) : null;
+        if (ffRefr) {
+          refr = ffRefr;
+          localId = ffLocalId;
+          logTrace(this, 'onOpenContainerMessage - using modeled copy',
+            'remoteId', remoteId.toString(16), 'localId', localId.toString(16));
+        }
+      }
 
       if (refr === null) {
         logError(this, 'onOpenContainerMessage - refr not found', 'remoteId', remoteId.toString(16), 'localId', localId.toString(16));
+        this.sendLootMarker(0);
+        return;
+      }
+
+      const corpseActor = Actor.from(refr);
+      if (!corpseActor) {
+        // Sacks/containers/furniture: marker 3 tells the handler ran for
+        // them too; their upstream flow stays untouched below.
+        this.sendLootMarker(3);
+      } else {
+        await this.openCorpseLoot(refr, corpseActor, remoteId);
         return;
       }
 
@@ -240,6 +288,149 @@ export class RemoteServer extends ClientListener {
         });
       })();
     });
+  }
+
+  /**
+   * Opens the loot menu on a dead NPC. Every outcome is reported to the
+   * server (server.log: "OnActivate - target N not found"):
+   *   6 = exception before/while performing the first Activate,
+   *   9 = exception in the post-activate checks (waits, menu state),
+   *   7 = the engine refused both Activate() attempts,
+   *   1 = Activate accepted but the menu is not open (local items > 0),
+   *   2 = Activate accepted but the menu is not open (local inventory empty),
+   *   10 = no cached server inventory for this corpse (property never arrived).
+   * Marker 4/5 (handler started / resumed after wait) are sent by the caller.
+   */
+  private async openCorpseLoot(refr: ObjectReference, corpseActor: Actor, remoteId: number): Promise<void> {
+    try {
+      if (Ui.isMenuOpen('ContainerMenu')) {
+        // A duplicate OpenContainer (echo of an earlier programmatic
+        // Activate) must not re-activate the corpse: doing so re-opened
+        // the menu right after the player closed it.
+        logTrace(this, 'openCorpseLoot - menu already open, skipping', 'localId', refr.getFormID().toString(16));
+        return;
+      }
+
+      if (!corpseActor.isDead()) {
+        // The server only enters its corpse branch when its own copy is dead.
+        // If the local copy hasn't died yet (it runs under deferred kill),
+        // Activate() wouldn't open the loot menu, so sync the state first.
+        logTrace(this, 'openCorpseLoot - local copy not dead yet, killing it', 'localId', refr.getFormID().toString(16));
+        corpseActor.endDeferredKill();
+        corpseActor.kill(null);
+      }
+
+      // Apply the server-side corpse inventory to the ref that actually
+      // resolves, so the menu shows the real loot (wolf fur, spider venom...).
+      const serverInventory = this.corpseInventories[remoteId];
+      if (serverInventory) {
+        try {
+          ModelApplyUtils.applyModelInventory(refr, serverInventory);
+        } catch (e) {
+          logError(this, 'openCorpseLoot - failed to apply server inventory', e);
+        }
+      } else {
+        // The corpse inventory property normally arrives just before
+        // OpenContainer; absence means the stash failed somewhere.
+        this.sendLootMarker(10);
+      }
+
+      // Remember what the corpse holds right now: whatever the player takes
+      // from the menu is the difference against this snapshot.
+      try {
+        const snapshot = getInventory(corpseActor);
+        if (snapshot.entries.length) {
+          corpseLootSnapshots[refr.getFormID()] = snapshot;
+        } else {
+          delete corpseLootSnapshots[refr.getFormID()];
+        }
+      } catch (e) {
+        logError(this, 'openCorpseLoot - failed to snapshot corpse inventory', e);
+      }
+
+      // dealWithRef/movementApply/worldCleaner set blockActivation(true), and
+      // the engine can refuse a scripted Activate() while it is blocked.
+      try {
+        refr.blockActivation(false);
+      } catch (e) {
+        logError(this, 'openCorpseLoot - blockActivation(false) failed', e);
+      }
+
+      let activated = false;
+      // Full default processing is what opens the vanilla loot menu;
+      // defaultProcessingOnly never did for corpses. The echo of these
+      // programmatic Activates is suppressed in activationService.
+      setSuppressActivateEcho(true);
+      try {
+        activated = !!refr.activate(Game.getPlayer(), false);
+      } catch (e) {
+        logError(this, 'openCorpseLoot - activate threw', e);
+        this.sendLootMarker(6);
+        return;
+      } finally {
+        setSuppressActivateEcho(false);
+      }
+
+      try {
+        await Utility.wait(0.25);
+        if (!Ui.isMenuOpen('ContainerMenu')) {
+          // Second attempt: defaultProcessingOnly, for the case when full
+          // processing was refused.
+          setSuppressActivateEcho(true);
+          try {
+            activated = !!refr.activate(Game.getPlayer(), true) || activated;
+          } catch (e) {
+            logError(this, 'openCorpseLoot - activate(default) threw', e);
+          } finally {
+            setSuppressActivateEcho(false);
+          }
+          await Utility.wait(0.4);
+        }
+
+        if (Ui.isMenuOpen('ContainerMenu')) {
+          logTrace(this, 'openCorpseLoot - loot menu opened', 'localId', refr.getFormID().toString(16));
+          return;
+        }
+
+        if (!activated) {
+          logError(this, 'openCorpseLoot - engine refused both Activate attempts', 'localId', refr.getFormID().toString(16));
+          this.sendLootMarker(7);
+          delete corpseLootSnapshots[refr.getFormID()];
+          return;
+        }
+
+        let localItemCount = -1;
+        try {
+          localItemCount = getInventory(corpseActor).entries.length;
+        } catch (e) {
+          logError(this, 'openCorpseLoot - getInventory failed', e);
+        }
+        this.sendLootMarker(localItemCount > 0 ? 1 : 2);
+      } catch (e) {
+        logError(this, 'openCorpseLoot - post-activate checks failed', e);
+        this.sendLootMarker(9);
+      }
+    } catch (e) {
+      logError(this, 'openCorpseLoot - corpse flow failed', e);
+      this.sendLootMarker(6);
+    }
+  }
+
+  /**
+   * Sends a synthetic Activate whose target is a tiny non-existent form id:
+   * the server logs "OnActivate - target N not found" and drops it. This is
+   * the persistent diagnosis channel for the loot flow (client printConsole
+   * output does not persist to any file).
+   */
+  private sendLootMarker(target: number): void {
+    try {
+      this.controller.emitter.emit("sendMessage", {
+        message: { t: messages.MsgType.Activate, data: { caster: 0x14, target, isSecondActivation: false } },
+        reliability: "reliable",
+      });
+    } catch (e) {
+      logError(this, 'sendLootMarker failed', target, e);
+    }
   }
 
   private onTeleportMessage(event: ConnectionMessage<TeleportMessage> | ConnectionMessage<TeleportMessage2>): void {
@@ -732,6 +923,12 @@ export class RemoteServer extends ClientListener {
     if (this.skipFormViewCreation(msg)) {
       const refrId = msg.refrId;
       once('update', () => {
+        if (msg.propName === 'inventory' && refrId) {
+          // Corpse loot: remember the server-side inventory even when the
+          // vanilla original below is gone; onOpenContainerMessage applies it
+          // to whichever local ref resolves (usually the protected FF copy).
+          this.corpseInventories[refrId] = msgData as Inventory;
+        }
         const refr = ObjectReference.from(Game.getFormEx(refrId));
         if (!refr) {
           logError(this, 'UpdateProperty: refr not found');
@@ -990,4 +1187,8 @@ export class RemoteServer extends ClientListener {
   }
 
   private numSetInventory = 0;
+
+  // the UpdateProperty('inventory') apply can miss; onOpenContainerMessage
+  // applies it to the ref that actually resolves.
+  private corpseInventories: Record<number, Inventory> = {};
 }

@@ -247,3 +247,45 @@ TEST_CASE("Evaluate LvlMudcrab template", "[espm]")
   // usually diff is less than 100, but we don't want to fail tests randomly
   REQUIRE(std::abs(countA - countB) < 2000);
 }
+
+TEST_CASE("CollectAllTerminalNpcs walks template chains and levelled lists",
+          "[espm]")
+{
+  auto& br = GetEspmLoader().GetBrowser();
+
+  SECTION("LvlAnimalForestPredator resolves to its six species")
+  {
+    // LvlAnimalForestPredator -> LCharAnimalForestPredator (LVLN) ->
+    // EncSkeever/EncWolf/EncFrostbiteSpiderLarge/EncBear/EncTroll/
+    // EncBearCave. Returned sorted (std::set based).
+    auto terminals =
+      LeveledListUtils::CollectAllTerminalNpcs(br, br.LookupById(0x1e7a0));
+    std::vector<uint32_t> expected = { 0x23a8a, 0x23a8b, 0x23ab7,
+                                       0x23aba, 0x23abe, 0x41fb4 };
+    REQUIRE(terminals == expected);
+  }
+
+  SECTION("LvlAnimalPlainsPredator resolves to its three species")
+  {
+    auto terminals =
+      LeveledListUtils::CollectAllTerminalNpcs(br, br.LookupById(0x1e7a1));
+    std::vector<uint32_t> expected = { 0x23ab5, 0x23ab7, 0x23abe };
+    REQUIRE(terminals == expected);
+  }
+
+  SECTION("LvlAmbientCreatures resolves to fox and hare")
+  {
+    auto terminals =
+      LeveledListUtils::CollectAllTerminalNpcs(br, br.LookupById(0xec968));
+    std::vector<uint32_t> expected = { 0x6dc9d, 0x829b3 };
+    REQUIRE(terminals == expected);
+  }
+
+  SECTION("an NPC without a template is its own terminal")
+  {
+    auto terminals =
+      LeveledListUtils::CollectAllTerminalNpcs(br, br.LookupById(0x23abe));
+    std::vector<uint32_t> expected = { 0x23abe };
+    REQUIRE(terminals == expected);
+  }
+}

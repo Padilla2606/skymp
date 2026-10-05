@@ -3,6 +3,7 @@
 #include "libespm/espm.h"
 #include <cstdint>
 #include <map>
+#include <set>
 #include <vector>
 
 class LeveledListUtils
@@ -29,7 +30,20 @@ public:
     const espm::CombineBrowser& br, const espm::LookupResult& headNpc,
     uint32_t pcLevel);
 
+  // Enumerates every terminal NPC reachable from headNpc through its template
+  // chain (TPLT) and any leveled creature lists (LVLN/LVLI) in between,
+  // without evaluating (i.e. without random/level-based selection). A terminal
+  // is an NPC without a template, or one whose template target cannot be
+  // resolved (then it counts as terminal itself). Duplicates and cycles are
+  // removed. Returns an empty vector when nothing can be resolved.
+  static std::vector<uint32_t> CollectAllTerminalNpcs(
+    const espm::CombineBrowser& br, const espm::LookupResult& headNpc);
+
 private:
+  static void CollectAllTerminalNpcsRecursive(
+    const espm::CombineBrowser& br, const espm::LookupResult& lookupRes,
+    std::set<uint32_t>& visited, std::set<uint32_t>& terminals);
+
   static const espm::NPC_* ConvertToNpc(
     const espm::LookupResult& lookupResult);
 

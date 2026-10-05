@@ -1,7 +1,7 @@
 import { Actor, ContainerChangedEvent, printConsole } from "skyrimPlatform";
 import { ClientListener, CombinedController, Sp } from "./clientListener";
 import { MsgType } from "../../messages";
-import { getPcInventory } from "./remoteServer";
+import { getPcInventory, getCorpseLootSnapshot, clearCorpseLootSnapshot } from "./remoteServer";
 import { getInventory, getDiff, hasExtras, removeSimpleItemsAsManyAsPossible, sumInventories } from "../../sync/inventory";
 import { LastInvService } from "./lastInvService";
 
@@ -20,6 +20,56 @@ export class ContainersService extends ClientListener {
         const sweetCantDropService = this.controller.lookupListener(SweetTaffySweetCantDropService);
 
         if (e.oldContainer && e.newContainer) {
+            // Corpse loot: derive the transfer from what actually left the
+            // corpse instead of diffing the player's whole inventory. The
+            // player-side diff also picks up unrelated drift (the periodic
+            // applyInventory in remoteServer), which used to make us send
+            // TakeItem for gold and other items the corpse never had.
+            if (e.oldContainer.getFormID() !== 0x14) {
+                const snapshot = getCorpseLootSnapshot(e.oldContainer.getFormID());
+                if (snapshot) {
+                    clearCorpseLootSnapshot(e.oldContainer.getFormID());
+
+                    let current = { entries: [] as any[] };
+                    try {
+                        current = getInventory(e.oldContainer);
+                    } catch (err) {
+                        printConsole(`failed to read corpse inventory: ${err}`);
+                    }
+
+                    const taken = getDiff(snapshot, current, false).entries
+                        .filter((entry) => entry.count > 0);
+
+                    const target = localIdToRemoteId(e.oldContainer.getFormID());
+                    if (target && taken.length) {
+                        const lastInvService = this.controller.lookupListener(LastInvService);
+                        for (const entry of taken) {
+                            const msg = {
+                                ...JSON.parse(JSON.stringify(entry)),
+                                t: MsgType.TakeItem,
+                                target,
+                            } as TakeItemMessage;
+                            msg.count = Math.abs(msg.count);
+                            if (this.sp.Game.getFormEx(entry.baseId)?.getName() === msg.name) {
+                                delete (msg as any).name;
+                            }
+                            this.controller.emitter.emit("sendMessage", {
+                                message: msg,
+                                reliability: "reliable"
+                            });
+                        }
+                        printConsole(`looted ${taken.length} entries from corpse ${target.toString(16)}`);
+                        if (lastInvService.lastInv) {
+                            lastInvService.lastInv = sumInventories(
+                                lastInvService.lastInv,
+                                { entries: taken.map((x) => ({ ...x, count: Math.abs(x.count) })) },
+                            );
+                        }
+                    }
+                    return;
+                }
+            }
+
             if (
                 e.oldContainer.getFormID() === 0x14 ||
                 e.newContainer.getFormID() === 0x14

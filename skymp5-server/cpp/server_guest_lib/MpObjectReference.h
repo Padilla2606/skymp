@@ -159,6 +159,11 @@ public:
   void RemoveItem(uint32_t baseId, uint32_t count, MpObjectReference* target);
   void RemoveItems(const std::vector<Inventory::Entry>& entries,
                    MpObjectReference* target = nullptr);
+
+  // Desync-tolerant variant of RemoveItems: moves only what is actually
+  // present instead of throwing, and reports the entries really removed.
+  void RemoveItemsClamped(const std::vector<Inventory::Entry>& entries,
+                          std::vector<Inventory::Entry>* removedEntries);
   void RemoveAllItems(MpObjectReference* target = nullptr);
   void RelootContainer();
   void RegisterProfileId(int32_t profileId);

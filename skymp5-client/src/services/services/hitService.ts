@@ -45,7 +45,12 @@ export class HitService extends ClientListener {
         const isSpell = !isWeapon && this.sp.Spell.from(e.source);
         const isScroll = !isWeapon && !isSpell && this.sp.Scroll.from(e.source);
 
-        if (!isWeapon && !isSpell && !isScroll) {
+        // Unarmed (source 0x0f / 0x137) is a legitimate attack: dropping it
+        // made melee damage silently stop working whenever the actor had no
+        // weapon equipped.
+        const isUnarmed = !isWeapon && !isSpell && !isScroll;
+
+        if (!isWeapon && !isSpell && !isScroll && !isUnarmed) {
             return;
         }
 

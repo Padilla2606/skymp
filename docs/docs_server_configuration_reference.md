@@ -387,6 +387,44 @@ how they should be spawned: in interior or exterior. By default all the npcs are
 }
 ```
 
+## npcAllowedBases
+
+Optional list of NPC base fragments. When it is a non-empty array, only NPCs whose base
+editorId contains (case-insensitively) one of the fragments are loaded from the game files.
+Everything else is skipped at load time, so no whitelist checks are needed in the gamemode.
+
+An empty array (or a missing key) disables the filter and allows every NPC.
+The match is a substring match, so `"wolf"` matches `EncWolf`, `LvlWolf`, `Werewolf`, etc.
+
+Many placed references do not use a species-named base directly, but a habitat-named
+template such as `LvlAnimalForestPredator`, whose levelled list contains only wolves,
+skeevers, spiders, bears and trolls. When the raw base editorId does not match, the
+server resolves the NPC's template chain (`TPLT` and the levelled creature lists in
+between) and loads the NPC only when *every* species reachable from it matches the
+whitelist. This keeps spawning deterministic (the pick from a levelled list is random)
+and lets all `LvlAnimal*Predator` bases spawn, while bases like `LvlAmbientCreatures`
+(foxes, hares) or `LvlAnimalForestPrey` (deer) stay excluded unless you add matching
+fragments such as `"fox"` or `"hare"`.
+
+```json5
+{
+  // ...
+  "npcAllowedBases": [
+    "wolf",
+    "bear",
+    "draugr",
+    "falmer",
+    "chaurus",
+    "giant",
+    "troll"
+  ],
+  // ...
+}
+```
+
+Note: this only decides which NPCs may exist on the server. Where they stand and what
+they respawn is configured in `npc-spots.json` (see `NPC-SPOTS.txt`).
+
 ## weaponStaminaModifiers
 
 This setting is only available with game mod file "SweetPie.esp".
@@ -439,6 +477,40 @@ If "damageMultFormulaSettings" is not present, the server will use some default 
   // ...
 }
 ```
+
+Note: when this setting is absent, the default `multiplier` is `2.0`, i.e. NPCs
+deal double damage to players.
+
+## armorFormulaSettings
+
+Scales the armor rating the server sums up from a player's worn armor, and adds
+vanilla's hidden per-piece bonus. The server does not simulate armor skill,
+perks or smithing, so without the multiplier the best armor set in the game
+would only reduce incoming physical damage by ~17%.
+
+```json5
+{
+  // ...
+  "armorFormulaSettings": {
+    "ratingMultiplier": 4.5,
+    "hiddenPieceBonus": 3.0
+  }
+  // ...
+}
+```
+
+* `ratingMultiplier` (default `4.5`): approximates armor skill 100 + perks +
+  matching set. A full daedric set (rating ~94) goes from ~11% to ~51% damage
+  reduction. Set it to `1.0` to use the raw vanilla base ratings.
+* `hiddenPieceBonus` (default `3.0`): percent of damage reduction added per
+  worn armor piece, equivalent to vanilla's hidden armor rating of 25 per piece.
+  A full set therefore gets +12% (+15% with a shield) on top of the rating
+  above, and daedric with a shield reaches the `fMaxArmorRating` cap (80%).
+  Set it to `0` to disable.
+
+Both values are read at server start, so they can be tuned later in
+`server-settings.json` without rebuilding. If "armorFormulaSettings" is not
+present, the defaults above are used.
 
 ## enableGamemodeDataUpdatesBroadcast
 

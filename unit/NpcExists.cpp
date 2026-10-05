@@ -108,3 +108,44 @@ TEST_CASE(
   partOne.worldState.defaultSetting.overriden = true;
   REQUIRE_NOTHROW(partOne.worldState.GetFormAt<MpActor>(cowId));
 }
+
+TEST_CASE(
+  "Template base loads when every species in its chain is whitelisted, and "
+  "stays skipped when its species are not",
+  "[NpcExists][espm]")
+{
+  PartOne& partOne = GetPartOne();
+  partOne.worldState.npcEnabled = true;
+
+  // Exterior refs in Skyrim.esm: allow exterior spawns for this test
+  // (previous tests left npcSettings with interior-only rules).
+  std::unordered_map<std::string, WorldState::NpcSettingsEntry> settings = {
+    { "Skyrim.esm", { true, true } }
+  };
+  partOne.worldState.SetNpcSettings(std::move(settings));
+
+  // LvlAnimalForestPredator (base 0x1e7a0) ref, Tamriel exterior.
+  static constexpr uint32_t forestPredatorRefrId = 0x85ccb;
+  // LvlAmbientCreatures (base 0xec968) ref, Tamriel exterior.
+  static constexpr uint32_t ambientCreaturesRefrId = 0x107d26;
+
+  // Neither base editorId contains one of these fragments: only the
+  // template chain can allow them.
+  partOne.worldState.SetNpcAllowedBases(
+    { "wolf", "skeever", "spider", "bear", "troll", "sabrecat" });
+
+  // Every creature LvlAnimalForestPredator can produce (wolves, skeevers,
+  // spiders, bears, trolls) is whitelisted, so the ref must load even
+  // though its own editorId matches nothing.
+  REQUIRE_NOTHROW(
+    partOne.worldState.GetFormAt<MpActor>(forestPredatorRefrId));
+
+  // LvlAmbientCreatures spawns foxes and hares, which are not whitelisted,
+  // so its ref must not load.
+  REQUIRE_THROWS_WITH(
+    partOne.worldState.GetFormAt<MpActor>(ambientCreaturesRefrId),
+    Catch::Matchers::ContainsSubstring("Form with id"));
+
+  partOne.DestroyActor(forestPredatorRefrId);
+  partOne.worldState.SetNpcAllowedBases({});
+}
